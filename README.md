@@ -20,4 +20,5 @@ Simply type `python [filename]`
 - Figures will be saved in a Figures/ folder
 - Animations will be saved in an Animations/ folder
 - Neural network weights will be saved in a Weights/ folder
+
 Users may have to manually create empty folders with these names before executing the code.
