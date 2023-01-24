@@ -25,10 +25,11 @@ J = 3 # number of operating modes
 dim = 2 # number of price processes, [price of electricity, price of gas]
 
 M = 180 # number of time steps
-N_p = 40000 # number of sample paths
+N_p = 100000 # number of sample paths
 dt = T/M
 delta = 0*dt # time delay for implementation (in years) = 12 hours
 D = 0 # number of time steps required between switches
+X0 = np.array([50.0, 6.0])
 
 basis = 'poly' # can choose 'poly' for standard polynomials or 'lag' for Laguerre polynomials (not ready yet)
 split = N_p//2
@@ -61,25 +62,29 @@ anim_path = f"Animation/{dt_string}-OG" # file path for images used in animation
 
 animateFlag =  False # whether to generate an animation from visualizations
 figFlag = True
+preInitFlag = False
 
 '''------------------MODEL-SPECIFIC FUNCTIONS------------------------'''
 
 # x = np.zeros((M, N_p, d)) is the empty array that will hold sample paths
 def generatePaths2D(x):
-    init = np.load(f'x_init.npy')[M]
+    if preInitFlag:
+        init = np.load(f'x_init.npy')[M]
 
-    x[0,:split] = np.array([50.0, 6.0]) # first portion are starting at initial point of interest
+        x[0,:split] = np.array([50.0, 6.0]) # first portion are starting at initial point of interest
 
-    if init.shape[0] > rest:
-        x[0,split:] = init[:rest]
+        if init.shape[0] > rest:
+            x[0,split:] = init[:rest]
+        else:
+            rep = rest//init.shape[0]
+            leftover = rep*init.shape[0]
+            x[0,split:(split+leftover)] = np.tile(init, (rep, 1))
+            x[0, (split+leftover):] = init[0]
     else:
-        rep = rest//init.shape[0]
-        leftover = rep*init.shape[0]
-        x[0,split:(split+leftover)] = np.tile(init, (rep, 1))
-        x[0, (split+leftover):] = init[0]
+        x[0] = np.array([50.0, 6.0])
 
 
-    lambda_poisson = 8
+    lambda_poisson = 16
     lambda_exp = 10
     d = 2 # dimension of data
 

@@ -60,7 +60,6 @@ maxerror = 0
 normFlag = False # whether to normalize data
 jumpFlag = True
 trainFlag = True # whether to train or to used saved weights
-animateFlag =  False # whether to generate an animation from visualizations
 figFlag = True
 earlyStopFlag = False
 preInitFlag = False
@@ -134,7 +133,6 @@ now = datetime.now()
 dt_string = now.strftime("%m-%d-%H%M%S")
 
 fig_path = f"Figures/{dt_string}" # file paths for figures to keep
-anim_path = f"Animation/{dt_string}" # file path for images used in animation
 weight_path = './Weights/weights2D-Z-' # file path for model weights
 
 ''' --------------- FUNCTIONS ---------------- '''
@@ -311,37 +309,6 @@ def getAdjX(aX, n):
 def g_hat(X):
     return np.zeros_like(X)
 
-def f_tensor(n, aX, j):
-    h_tech = tf.constant([1.0, 1.0]) # heat rates for technologies
-    h_CO2 = tf.constant([[0.1], [0.5]]) # CO2 production for technologies
-    S = tf.transpose(h_CO2*aX[:, (1+n_tech)]) + h_tech * aX[:, (2+n_tech):]
-
-    curr_C = C[j] * aX[:, 1:(1+n_tech)] # shape (M_training, n_tech)
-    curr_total_C = total_C[j] # shape (M_training,)
-    if curr_total_C == 0:
-        print("oh no")
-
-    f_pt1 = tf.where(aX[:,0] <= 0, S[:,0], 0) # no need to produce but you still use, price set by cheapest tech
-
-    m1 = (S[:,1] - S[:,0])/tf.maximum(curr_C[:,0], 1) # avoid divide by 0
-    cost1 = m1 * aX[:,0] + 2 * S[:,0] # increases linearly with D just for simplicity
-    bool1 = (aX[:,0] < curr_C[:,0])
-    bool2 = (0 <= aX[:,0])
-    f_pt2 = tf.where(tf.math.logical_and(bool1, bool2), cost1, 0) # only need to use cheaper tech
-
-    m2 = (P_max - 2*S[:,1])/curr_total_C
-    cost2 = tf.minimum(m2 * (aX[:,0] - curr_C[:,0]) + 2*S[:,1], P_max) # increases linearly with D just for simplicity
-    f_pt3 = tf.where(aX[:,0] >= curr_C[:,0], cost2, 0) # need to use more expensive tech
-
-    price = f_pt1 + f_pt2 + f_pt3
-    #price = 500
-
-    cost = tf.math.reduce_sum(curr_C * S, axis = 1) # amount you're spending on production indep of demand, (M_training, n_tech)
-    revenue = tf.minimum(aX[:,0], curr_total_C)  * price
-    profit = revenue - cost
-
-    return profit # want to return tensor of shape (batchSize, )
-
 def c(i,j,aX):
     S = aX[:, (1+n_tech+1):]
     # i is current mode (rows) and j is new mode (columns)
@@ -407,6 +374,37 @@ def f(aX):
         #penalty = np.maximum(D - curr_total_C, 0) * P_max # charged a penalty of $P_max per unmet GW of electricity I guess
 
         profit[:,j] = revenue - fixed_cost #- penalty
+
+    return profit, price #want to return two arrays of shape (M_training, J)
+
+# alternate running cost suggested by Reviewer 1
+def f2(aX):
+    D = aX[:,0] # demand
+    A = aX[:, 1:(1+n_tech)] # availability
+    CO2 = aX[:, (1+n_tech)] # CO2 prices
+    S = aX[:, (2+n_tech):-1] # technology prices
+    price = aX[:, -1] # electricity price
+
+    h_CO2 = np.array([[0.5], [2], [0]]) # CO2 production for technologies
+    h_tech = np.array([1.0, 1.5, 1.5]) # heat rates for technologies, natural gas = 6,654 Btu/kWh, coal = 10,300 Btu/kWh, nuclear = 10,446 Btu/kWh
+
+    profit = np.zeros((M_training, J))
+
+    for j in range(J):
+        S2 = np.transpose(h_CO2*CO2) + h_tech * S # shape (M_training, n_tech)
+
+        curr_C = C[j] * A # shape (M_training, n_tech)
+
+        curr_total_C = np.sum(curr_C, axis = 1) # shape (M_training,)
+
+        fixed_cost = np.sum(C[j] * S2, axis = 1) # amount you're spending on production indep of demand, (M_training, n_tech)
+        revenue = np.minimum(D, curr_total_C) * price
+        #penalty = np.maximum(D - curr_total_C, 0) * P_max # charged a penalty of $P_max per unmet GW of electricity I guess
+
+        underproduce = np.maximum(D - curr_total_C, 0) * price*2 # buy at premium
+        overproduce = np.maximum(curr_total_C - D, 0) * price/2 # sell at discount
+
+        profit[:,j] = revenue - fixed_cost + overproduce - underproduce
 
     return profit, price #want to return two arrays of shape (M_training, J)
 
@@ -505,7 +503,6 @@ n_layers = {n_layers} \n
 preInitFlag = {preInitFlag} \n
 jumpFlag = {jumpFlag} \n
 trainFlag = {trainFlag} \n
-animateFlag =  {animateFlag} \n
 figFlag = {figFlag} \n
 early stopping = {earlyStopFlag} \n
 modes = {C} \n""")
@@ -528,15 +525,15 @@ for trial in range(n_trials):
         print("Generating training data")
         #X_train = generateData(X_train) #[time slice][sample in set][dimension of portfolio]
         X_curr, rng_seed = setX(X_curr) #unprocessed X at time N
-
+        np.save('x_mr.npy', X_curr)
+        rng_temp = np.append(rng_seed[1], [rng_seed[2], rng_seed[3], rng_seed[4]])
+        np.save('rng.npy', rng_temp)
     else:
         print("Loading training data")
         X_curr = np.load('x_mr.npy')
-        rng_seed = np.load('rng.npy', allow_pickle=True) #fails bc object array but idc at this point
-        #witches = np.load('switches')
-
-    if animateFlag:
-        visualsML.visualize2D(X_train[N], switches[N], bounds, N, dt, anim_path)
+        rng_temp = np.load('rng.npy')
+        rng_seed = ('MT19937', rng_temp[:624], int(rng_temp[624]), int(rng_temp[625]), rng_temp[626]) # reconstruct rng state
+        #switches = np.load('switches')
 
     listD[1, N] = np.around(X_curr[:,0], 4)
     X_train = getAdjX(X_curr, N) # this is what we use to actually train
@@ -545,34 +542,25 @@ for trial in range(n_trials):
     print(f"""avg marginal profit is {np.round(np.mean(curr_profit, axis = 0)*dt, 3)}
     with variance {np.round(np.var(curr_profit*dt, axis = 0),4)}""")
 
-    xmax = np.ceil(np.amax(X_train[:,(2+n_tech)])) # high price, tech 1
-    xmin = np.floor(np.amin(X_train[:,(2+n_tech)]))# low price, tech 1
-    ymax = np.ceil(np.amax(X_train[:,-1])) # high price, tech 2
-    ymin = np.floor(np.amin(X_train[:,-1])) # high price, tech 2
-    bounds = [xmin, xmax, ymin, ymax]
-    #bounds = [0, 170, 0, 17]
-
-    #print(f"bounds are {bounds}")
-    #print(f"max profit at N: {np.amax(curr_profit*dt)}")
-    #print(f"min profit at N: {np.amin(curr_profit*dt)}")
+    method = 1 # 0 for average value in figures, 1 for mode (most frequent) value in figures
 
     n = N
-    labels1 = ['Avg. Switching Strategy', 'Electricity Price', 'Gas Price', 'Mode 1', 'Mode 2', 'Mode 3', 'Mode 4']
-    labels2 = ['Avg. Switching Strategy', 'Electricity Price', 'Coal Price', 'Mode 1', 'Mode 2', 'Mode 3', 'Mode 4']
-    labels3 = ['Avg. Switching Strategy', 'Electricity Price', 'Nuclear Price', 'Mode 1', 'Mode 2', 'Mode 3', 'Mode 4']
+    labels1 = ['Switching Strategy', 'Electricity ($/Mwh)', 'Gas ($/MMBtu)', 'Mode 1', 'Mode 2', 'Mode 3', 'Mode 4']
+    labels2 = ['Switching Strategy', 'Electricity ($/Mwh)', 'Coal ($/MT)', 'Mode 1', 'Mode 2', 'Mode 3', 'Mode 4']
+    labels3 = ['Switching Strategy', 'Electricity ($/Mwh)', 'Nuclear ($/kg)', 'Mode 1', 'Mode 2', 'Mode 3', 'Mode 4']
 
-    visualsML.binHeatmap2(X_train[:,-1], X_train[:,2+n_tech], switches[n] + 1, labels1, n, fig_path)
-    visualsML.binHeatmap2(X_train[:,-1], X_train[:,3+n_tech], switches[n] + 1, labels2, n, fig_path)
-    visualsML.binHeatmap2(X_train[:,-1], X_train[:,4+n_tech], switches[n] + 1, labels3, n, fig_path)
+    visualsML.gridHeatmap(X_train[:,-1], X_train[:,2+n_tech], switches[n] + 1, labels1, method, n, fig_path)
+    visualsML.gridHeatmap(X_train[:,-1], X_train[:,3+n_tech], switches[n] + 1, labels2, method, n, fig_path)
+    visualsML.gridHeatmap(X_train[:,-1], X_train[:,4+n_tech], switches[n] + 1, labels3, method, n, fig_path)
 
 
-    labels11 = ['Avg. Switching Strategy', 'Coal Price', 'Gas Price', 'Mode 1', 'Mode 2', 'Mode 3', 'Mode 4']
-    labels21 = ['Avg. Switching Strategy', 'Nuclear Price', 'Coal Price', 'Mode 1', 'Mode 2', 'Mode 3', 'Mode 4']
-    labels31 = ['Avg. Switching Strategy', 'Gas Price', 'Nuclear Price', 'Mode 1', 'Mode 2', 'Mode 3', 'Mode 4']
+    labels11 = ['Switching Strategy', 'Coal ($/MT)', 'Gas ($/MMBtu)', 'Mode 1', 'Mode 2', 'Mode 3', 'Mode 4']
+    labels21 = ['Switching Strategy', 'Nuclear ($/kg)', 'Coal ($/MT)', 'Mode 1', 'Mode 2', 'Mode 3', 'Mode 4']
+    labels31 = ['Switching Strategy', 'Gas ($/MMBtu)', 'Nuclear ($/kg)', 'Mode 1', 'Mode 2', 'Mode 3', 'Mode 4']
 
-    visualsML.binHeatmap2(X_train[:,3+n_tech], X_train[:,2+n_tech], switches[n] + 1, labels11, n, fig_path)
-    visualsML.binHeatmap2(X_train[:,4+n_tech], X_train[:,3+n_tech], switches[n] + 1, labels21, n, fig_path)
-    visualsML.binHeatmap2(X_train[:,2+n_tech], X_train[:,4+n_tech], switches[n] + 1, labels31, n, fig_path)
+    visualsML.gridHeatmap(X_train[:,3+n_tech], X_train[:,2+n_tech], switches[n] + 1, labels11, method, n, fig_path)
+    visualsML.gridHeatmap(X_train[:,4+n_tech], X_train[:,3+n_tech], switches[n] + 1, labels21, method, n, fig_path)
+    visualsML.gridHeatmap(X_train[:,2+n_tech], X_train[:,4+n_tech], switches[n] + 1, labels31, method, n, fig_path)
 
 
 
@@ -589,7 +577,7 @@ for trial in range(n_trials):
         #print(f"at {n}, max price is ${np.amax(X_train[:, 2+n_tech])} (fuel 1) and ${np.amax(X_train[:, 3+n_tech])} (fuel 2)")
         #print(f"number of zeros: {np.count_nonzero(X_train[:,1:(1+n_tech)] <= 1e-4)}")
 
-        curr_profit, curr_price = f(X_train)
+        curr_profit, curr_price = f2(X_train)
 
         print(f"avg marginal profit is {np.round(np.mean(curr_profit, axis = 0)*dt, 3)} with variance {np.round(np.var(curr_profit*dt, axis = 0),4)}")
         #print(f"avg price is {np.round(np.mean(curr_price, axis = 0), 3)} with variance {np.round(np.var(curr_price, axis = 0),3)}")
@@ -657,13 +645,13 @@ for trial in range(n_trials):
             Y_hat[:, i] = curr[np.arange(M_training, dtype = int), switches[n,:,i]]
 
         if figFlag and (n > N-20 or n%10 ==0):
-            visualsML.binHeatmap2(X_train[:,-1], X_train[:,2+n_tech], focus_switch[0] + 1, labels1, n, fig_path)
-            visualsML.binHeatmap2(X_train[:,-1], X_train[:,3+n_tech], focus_switch[0] + 1, labels2, n, fig_path)
-            visualsML.binHeatmap2(X_train[:,-1], X_train[:,4+n_tech], focus_switch[0] + 1, labels3, n, fig_path)
+            visualsML.gridHeatmap(X_train[:,-1], X_train[:,2+n_tech], focus_switch[0] + 1, labels1, method, n, fig_path)
+            visualsML.gridHeatmap(X_train[:,-1], X_train[:,3+n_tech], focus_switch[0] + 1, labels2, method, n, fig_path)
+            visualsML.gridHeatmap(X_train[:,-1], X_train[:,4+n_tech], focus_switch[0] + 1, labels3, method, n, fig_path)
 
-            visualsML.binHeatmap2(X_train[:,3+n_tech], X_train[:,2+n_tech], focus_switch[0] + 1, labels11, n, fig_path)
-            visualsML.binHeatmap2(X_train[:,4+n_tech], X_train[:,3+n_tech], focus_switch[0] + 1, labels21, n, fig_path)
-            visualsML.binHeatmap2(X_train[:,2+n_tech], X_train[:,4+n_tech], focus_switch[0] + 1, labels31, n, fig_path)
+            visualsML.gridHeatmap(X_train[:,3+n_tech], X_train[:,2+n_tech], focus_switch[0] + 1, labels11, method, n, fig_path)
+            visualsML.gridHeatmap(X_train[:,4+n_tech], X_train[:,3+n_tech], focus_switch[0] + 1, labels21, method, n, fig_path)
+            visualsML.gridHeatmap(X_train[:,2+n_tech], X_train[:,4+n_tech], focus_switch[0] + 1, labels31, method, n, fig_path)
 
         #avgP[n] = np.mean(curr_price[np.arange(M_training, dtype = int), switches[n,:,0]])
 
@@ -671,15 +659,9 @@ for trial in range(n_trials):
         print(f'Post-switches: {np.mean(Y_hat[:, :J], axis = 0)}')
         print(f'Avg. gas: {np.mean(X_train[:,2+n_tech])}, avg. coal: {np.mean(X_train[:,3+n_tech])}, avg. nuclear: {np.mean(X_train[:,4+n_tech])}')
 
-        if animateFlag:
-            visualsML.visualize2D(X_train, switches[n], bounds, n, dt, anim_path)
-
     #end of for-loop for N, time slices
     print(f"Max error using intermittent saves: {maxerror}")
 
-    if animateFlag:
-        print("Animating....")
-        visualsML.animate(anim_path, N)
     ''' --------------- CALCULATE EXPECTED VALUE AS TRIAL OUTPUT ---------------- '''
     print(f"Neural Network Results: {final}")
     Y0_list[trial] = final

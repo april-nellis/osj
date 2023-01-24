@@ -43,7 +43,7 @@ if example == 1:
     sigma = np.array([[0.5, 0.32], [0, 0.24]]) # d x d correlation for BM, sigma[i,j] corresponds to coefficient of ith BM for jth state variable
 
 elif example == 2:
-    d = 80
+    d = 20
     x0 = np.ones(d)*6.0
     x0[0] = 50.0
 
@@ -99,7 +99,7 @@ trainFlag = True # whether to train or to used saved weights
 animateFlag =  False # whether to generate an animation from visualizations
 figFlag = True
 earlyStopFlag = False
-preInitFlag = False
+preInitFlag = True
 if preInitFlag and example == 1:
     X0 = np.load(f'x_init.npy')[N]
 else:
@@ -110,7 +110,7 @@ batchSize = 1000 #size of each minibatch
 n_batches = 100 #number of batches
 M_training = batchSize*n_batches # Size of the training set
 myLearnRate = 1e-3
-n_epochs = 101 #epoch = one pass through training data
+n_epochs = 21 #epoch = one pass through training data
 
 #layer sizes
 n_inputs = d # dimension of X
@@ -124,7 +124,7 @@ n_layers = 4
 
 class LossPrintingCallback(keras.callbacks.Callback):
     def on_epoch_end(self, epoch, logs=None):
-        if epoch%50 == 0:
+        if epoch%5 == 0:
             #file.write("The avg loss for epoch {} is {:.6f}, lr = {:.6g}. \n".format(epoch, logs["loss"], self.model.optimizer.lr.read_value()))
             print("The avg loss for epoch {} is {:.6f}, lr = {:.6g}.".format(epoch, logs["loss"], self.model.optimizer.lr.read_value()))
 
@@ -276,6 +276,7 @@ def f(x):
 
 def loss_object(n,j):
     def my_loss(y_input, yz_pred):
+        # \hat Y_{n+1} - Y_n - f \Delta t + Z \Delta W + Jump \Delta N = 0
         y_true = tf.expand_dims(y_input[:,j],1) #shape is (batchSize,1), calculated Y_hat[n+1]
         f_j = y_input[:,-1] #shape is (batchSize,d)
 
@@ -396,8 +397,8 @@ def trainJumps(n, j, flag, filepath):
         if n < N-1:
             model.load_weights(filepath + str(n+1) + '-' + str(j))
 
-        if n >= N - 3:
-            curr_epochs = n_epochs*3 - 2
+        if n > N-3:
+            curr_epochs = n_epochs*2 - 1
         else:
             curr_epochs = n_epochs
 
@@ -426,7 +427,7 @@ if animateFlag:
     print("Animating....")
     visualsML.animate(anim_flag, N)
 """
-
+real_start = time.time()
 file = open(fig_path + "_parameters.txt", "w")
 file.write(f"""example = {example} \n
 T = {T} \n
@@ -466,6 +467,7 @@ for trial in range(n_trials):
     ymax = np.ceil(np.amax(X_train[:,:,1])) + 1
     ymin = np.floor(np.amin(X_train[:,:,1])) - 1
     #bounds = [xmin, xmax, ymin, ymax]
+
     bounds = [5, 200, 2, 17]
 
     if figFlag:
@@ -502,7 +504,10 @@ for trial in range(n_trials):
             # NOTE!! don't think Z and U need to be saved since new Z,U aren't trained w prev Z,U
 
             if n == 0:
-                initial = tf.convert_to_tensor(x0)
+                if example == 1:
+                    initial = tf.convert_to_tensor(x0)
+                else:
+                    initial = tf.convert_to_tensor(np.expand_dims(x0, axis = 0))
                 result = model(initial, training = False) #get the value function for a specific initial vector
                 print(result[0,0])
                 final[k] = result[0,0]
@@ -548,26 +553,13 @@ for trial in range(n_trials):
     ''' --------------- CALCULATE EXPECTED VALUE AS TRIAL OUTPUT ---------------- '''
 
     #final_avg = np.mean(final, axis = 0)
-    M_test = M_training//2
-    optimal_paths = np.zeros((N+1, M_test)) # first half of paths start at the same point, second half follow a distribution
-    modes = np.ones(M_test, dtype = int) # current mode of each path, start in mode 1
-    new_modes = np.ones(M_test, dtype = int)
-    for n in range(N):
-        x = X_train[n, :M_training//2] # first half of training data
-        new_modes = switches[n,np.arange(M_test, dtype = int), modes] # update current mode
-        switching_cost = (1 - np.equal(modes, new_modes)) * c(0,1,n)# corresponding switching cost
-        run = f(x)*dt
-        running_cost = run[np.arange(M_test, dtype = int), new_modes] # corresponding running cost for new mode
-        optimal_paths[n+1] = optimal_paths[n] + running_cost - switching_cost # y isn't in running cost
-
-    paths_avg = np.mean(optimal_paths[N])
-    print(f"Pathwise Results: {paths_avg}")
     print(f"Neural Network Results: {final}")
-    Y0_list[trial] = paths_avg
-#end of for-loop for n_trials
+    Y0_list[trial] = final
 
+#end of for-loop for n_trials
+real_end = time.time()
 value_fn = np.mean(Y0_list[:,0]) # take average over all trials to find u(0, x_0)
-description = f"Power Plant Switching Problem (2D)\
-Batches: {n_batches}, Batch size: {batchSize}, Normalization: {normFlag}, \
-Learned Solution: {round(value_fn,6)}, Total time: {np.sum(timing)}"
+description = f"Power Plant Switching Problem ({d}-D) \n\
+Batches: {n_batches}, Batch size: {batchSize}, Normalization: {normFlag}, Total time: {real_end - real_start}"
 print(description)
+print(f'Learned Solution: {round(value_fn,6)}')

@@ -1,4 +1,7 @@
 Weights/
 Animation/
 Figures/
+*.rtf
+*.npy
+*.pyc
 .DS_Store
